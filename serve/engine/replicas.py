@@ -370,11 +370,6 @@ class ReplicaEngine:
         state = [r.gpu_state_mib() for r in self.replicas]
         return None if any(s is None for s in state) else sum(state)
 
-    @property
-    def proc(self):
-        """None: the processes are the replicas' own."""
-        return None
-
     def __getattr__(self, name):
         """What every replica has alike (the model file, its facts, the encoder's state): the first card's."""
         if name.startswith("__"):

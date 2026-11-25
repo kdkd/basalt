@@ -52,6 +52,6 @@ def checked(req: dict, engine) -> dict[int, float]:
     bias = normalize(req.get("logit_bias"), vocab if known else None)
     if bias and started and not known:
         raise ValueError("logit_bias: this engine build cannot apply token biases")
-    if bias and getattr(engine, "batch", 0):
+    if bias and any(getattr(e, "batch", 0) for e in getattr(engine, "replicas", [engine])):   # each card's own slots
         raise ValueError("logit_bias: not supported with parallel slots (--parallel)")
     return bias

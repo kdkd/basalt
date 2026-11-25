@@ -130,6 +130,13 @@ class Routing(unittest.TestCase):
         e.active = [0, 0]
         self.assertEqual(e.choose(Text(body + " next turn")), i)
 
+    def test_logit_bias_follows_each_cards_own_slots(self):
+        from serve.api.logit_bias import checked
+        req = {"logit_bias": {"5": 10}}
+        self.assertEqual(checked(req, ReplicaEngine([Stub(batch=0), Stub(batch=0)], [0, 1])), {5: 10.0})
+        with self.assertRaisesRegex(ValueError, "parallel slots"):
+            checked(req, ReplicaEngine([Stub(batch=2), Stub(batch=2)], [0, 1]))
+
     def test_slots_are_numbered_card_after_card(self):
         e = ReplicaEngine([Stub(batch=2), Stub(batch=0)], [0, 1])
         self.assertEqual(e.batch, 3)
