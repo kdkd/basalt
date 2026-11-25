@@ -85,7 +85,7 @@ Command line `--name`; the Where column says which config block takes it.
 | Setting | Where | Type, values | Default | What it does |
 | --- | --- | --- | --- | --- |
 | `gpu` | entry, `basalt`, `basalt-bench`, `basalt-probe` | `"0"`, `"0,1"`, `"all"` | GPU 0 alone | Cards, numbered as `nvidia-smi`. The first is the main card; `all` is every visible card in order. Unset with more cards visible: one warning at start. [GPUs](gpus.md) |
-| `gpu-mode` | entry, `basalt`, `basalt-bench`, `basalt-probe` | `"peer"`, `"split"`, `"tensor"` | none | What the cards do together. Required when `gpu` names two or more cards, an error with one. [GPUs](gpus.md#modes) |
+| `gpu-mode` | entry, `basalt`, `basalt-bench`, `basalt-probe` | `"peer"`, `"split"`, `"tensor"`, `"replica"` (entry only) | none | What the cards do together. Required when `gpu` names two or more cards, an error with one. [GPUs](gpus.md#modes) |
 | `gpu-share` | entry, `basalt`, `basalt-bench`, `basalt-probe` | `"3,1"` | by the mode | Relative shares, one positive number per card in the order of `gpu`. [GPUs](gpus.md#shares) |
 | `peer-reserve-mib` | engine | MiB | 600 | VRAM the second card keeps free after its experts and prompt buffers. Raise it when the start says the peer's buffers do not fit. [GPUs](gpus.md#two-16-gb-cards) |
 

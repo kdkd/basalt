@@ -109,7 +109,9 @@ the text model.
 `"split"`. The model runs both on two cards and refuses `tensor` and a third card. With `gpu` unset and two cards visible the start warns once that GPU 1 is unused.
 At default settings one card is the fastest setup up to 1M tokens of context: the experts that do not fit are computed on the CPU
 and the elastic copies bring them back while the caches leave room, so most runs need neither mode. Use a mode when a card is too
-small or held back (a desktop, another process).
+small or held back (a desktop, another process). For several conversations at once, the server's `gpu-mode replica` runs the
+whole model on each card: on two RTX PRO 6000 it serves eight conversations at 932 tokens/s against 544 on one card
+([replica mode](../configuration/gpus.md#replica-mode)).
 
 - **Peer:** the main card runs every layer, and the hottest experts that spilled from it live in the second card's VRAM (no RAM
   copy). In decode the peer computes those experts' rows beside the CPU pool and the card merges them as before; in a prompt the

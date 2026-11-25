@@ -9,7 +9,7 @@ in `basalt` itself, in `basalt-bench` and in `basalt-probe`.
 | Setting | Values | Default |
 | --- | --- | --- |
 | `gpu` | a number (`0`), a list (`0,1`, `1,0,2`) or `all` | GPU 0 alone; one warning at start names the other visible cards (only when `gpu` is unset) |
-| `gpu-mode` | `peer`, `split`, `tensor` | none; required when `gpu` names two or more cards, an error with one |
+| `gpu-mode` | `peer`, `split`, `tensor`, `replica` (the server only) | none; required when `gpu` names two or more cards, an error with one |
 | `gpu-share` | one positive number per card, in the order of `gpu` (`3,1`) | by the mode ([shares](#shares)); an error with one card |
 
 - Cards are numbered as `nvidia-smi` numbers them. The first card listed is the main card; `all` is every visible card in order, so
@@ -37,6 +37,8 @@ the shares, and checks the model's modes without loading it.
 - **split:** the layers are divided between the cards in order; each card holds its layers' weights and their KV cache and
   recurrent state, and a window or prompt chunk crosses from one card to the next. The cut follows the shares.
 - **tensor:** every layer sharded across the cards. The name is reserved; no model runs it yet.
+- **replica:** the server runs one engine per card, each with the whole model and its own slots, behind one address
+  ([replica mode](#replica-mode)). Every model runs it on any number of cards that each hold the model.
 
 | Model | peer | split | tensor |
 | --- | --- | --- | --- |
@@ -113,6 +115,32 @@ model's experts or caches.
   one card holds or copies back its experts ([Inkling](../models/inkling2.md#two-cards)).
 - A split costs a fixed part of a window per crossing: use it for a model or context that does not fit one card, and a peer where it
   does.
+
+## Replica mode
+
+The server starts one engine per card of `gpu`, each the whole model at the entry's settings (`parallel` slots and
+`max-context` per card), and sends every request to one of them. `basalt`, `basalt-bench` and `basalt-probe` refuse the mode.
+
+- **Routing:** a request goes to the card that recently read the longest start of its prompt, among the cards with a free slot
+  (else among all of them), so an agent's next turn reads only its new tokens; a prompt no card holds goes to the least busy
+  card, and the client's session header breaks a tie. A conversation that moves to another card reads its prompt again there.
+- **Shared budgets:** `conversation-cache-mib` and `conversation-cache-disk-mib` are the machine's RAM and disk, divided
+  equally between the cards; each card parks its conversations in its own folder (`gpu<N>` under the cache folder) and writes
+  its own engine log (`engine.gpu<N>.log` beside the first card's).
+- **Pictures:** the least busy card encodes a request's pictures.
+- **Start, sleep, unload:** the cards load at once and sleep, wake and unload together; a card that ended starts again alone at
+  the next request, while the other keeps its conversations.
+- `gpu-share` is refused: every card holds the whole model.
+- Use it for several conversations at once on a model that fits one card. One conversation decodes as fast as on one card.
+
+Measured, Inkling 2 Mini (q8 pack) on two RTX PRO 6000 at 600 W, `--max-context 131072 --slot-full-context`, eight
+conversations of four turns each (a 12K-token start, 400 tokens a turn), ABBA x2:
+
+| | one card, `parallel 8` | `gpu-mode replica`, `parallel 4` | `gpu-mode split`, `parallel 8` |
+| --- | --- | --- | --- |
+| Tokens/s, all conversations | 544 | 932 | 524 (one run) |
+| Wall time | 23.5 s | 13.7 s | 24.5 s |
+| One conversation alone, tokens/s | 336.6 | 334.5 | |
 
 ## Two 16 GB cards
 
