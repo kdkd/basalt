@@ -147,7 +147,10 @@ bool parse_gpu_mode(const std::string& text, GpuMode& out, std::string& err) {
     if (t.empty()) return true;
     for (GpuMode m : {GpuMode::Peer, GpuMode::Split, GpuMode::Tensor})
         if (t == gpu_mode_name(m)) { out = m; return true; }
-    err = "gpu-mode \"" + t + "\": expected peer, split or tensor; see docs/configuration/gpus.md";
+    if (t == "replica")   // the server's mode: one engine per card, each given one card
+        err = "gpu-mode replica: the server runs it (basalt serve); basalt, basalt-bench and basalt-probe take peer, split or tensor; see docs/configuration/gpus.md";
+    else
+        err = "gpu-mode \"" + t + "\": expected peer, split or tensor; see docs/configuration/gpus.md";
     return false;
 }
 

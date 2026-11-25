@@ -87,6 +87,8 @@ int main() {
         CHECK(!parse_gpu_mode("auto", m, err));
         CHECK_STR(err, "gpu-mode \"auto\": expected peer, split or tensor; see docs/configuration/gpus.md");
         CHECK(!parse_gpu_mode("Peer", m, err));
+        CHECK(!parse_gpu_mode("replica", m, err));
+        CHECK_STR(err, "gpu-mode replica: the server runs it (basalt serve); basalt, basalt-bench and basalt-probe take peer, split or tensor; see docs/configuration/gpus.md");
     }
     // A 5090 and a 5060 Ti, in nvidia-smi order.
     {
