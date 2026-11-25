@@ -22,7 +22,7 @@ and entry options of the config (`serve/config.py` `MODEL_OPTIONS`), so each mod
 | Setting | Values | Default | Meaning |
 | --- | --- | --- | --- |
 | `gpu` | `0`, `0,1`, `1,0,2`, ..., `all` | GPU 0 alone, with one warning that names the other visible cards | The cards, numbered as `nvidia-smi` numbers them. The first card listed is the main card. `all` means every visible card in that order, so GPU 0 is the main card. |
-| `gpu-mode` | `peer`, `split`, `tensor` | none | Required when `gpu` names two or more cards. Not allowed with one card. |
+| `gpu-mode` | `peer`, `split`, `tensor`, `replica` | none | Required when `gpu` names two or more cards. Not allowed with one card. `replica` is the server's alone ([replica](replica.md)). |
 | `gpu-share` | positive numbers, one per card, such as `3,1` | see [shares](#shares) | Relative shares, in the same order as `gpu`. Not allowed with one card. |
 
 - **peer:** the main card runs every layer and the others help: experts and prompt stages in a MoE model, prompt stages in a
