@@ -566,9 +566,9 @@ class Service:
         return out
 
     def _gpu_state_mib(self) -> int | None:
-        """The GPU memory this engine's process holds: what the driver moves into RAM when it sleeps."""
-        pid = getattr(getattr(self.engine, "proc", None), "pid", None)
-        return vram.process_mib(pid) if pid else None
+        """The GPU memory this engine's processes hold: what the driver moves into RAM when they sleep."""
+        state = getattr(self.engine, "gpu_state_mib", None)
+        return state() if callable(state) else None
 
     def park_need_mib(self) -> int | None:
         """The RAM this engine would hold asleep, before it sleeps: its own memory and its GPU state."""
@@ -688,8 +688,7 @@ class Service:
 
     def _sleep_fits(self) -> str | None:
         """Whether the GPU memory the engine still holds fits in RAM with the margin left; None if so, else why not."""
-        pid = getattr(getattr(self.engine, "proc", None), "pid", None)
-        used = vram.process_mib(pid) if pid else None    # the engine's own memory: what the driver moves to RAM
+        used = self._gpu_state_mib()                     # the engine's own memory: what the driver moves to RAM
         if used is None:
             used = self.used_vram_mib()
         avail = available_ram_mib()

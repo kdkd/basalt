@@ -163,7 +163,7 @@ def check_model(a, file_engine: list[str], cli_engine: list[str], used_argv: lis
                 if replica:                            # the whole model on each card: each card's own plan, alone
                     plans = [model_plan(a.engine_bin, a.model, c, list(spec.engine_words)) for c in replica_cards(spec.gpu)]
                     plan = plans[0]
-                    cfg["replicas"] = [p["devices"] for p in plans]
+                    cfg["replicas"] = [each["devices"] for each in plans]
                 else:
                     plan = model_plan(a.engine_bin, a.model, spec.gpu, list(spec.engine_words), a.gpu_mode, a.gpu_share)
             except ValueError as e:
@@ -172,10 +172,12 @@ def check_model(a, file_engine: list[str], cli_engine: list[str], used_argv: lis
             if card is not None:                       # a numbered sidecar card: the engine's sm_120 rule is the
                 if gpu_card_name(card) is None:        # engine's; the sidecar is its own build and says whether
                     fail(f"vision: GPU {card} is not found by nvidia-smi")   # the sidecar checks the card itself
-            for note in plan.get("notes") or []:
-                lines.append(f"[server] {note}")
-            if plan.get("warning"):
-                lines.append(f"[server] warning: {plan['warning']}")
+            for each in plans if replica else [plan]:
+                for note in each.get("notes") or []:
+                    if f"[server] {note}" not in lines:
+                        lines.append(f"[server] {note}")
+                if each.get("warning") and f"[server] warning: {each['warning']}" not in lines:
+                    lines.append(f"[server] warning: {each['warning']}")
             cfg["gpu"] = plan["devices"]
             cfg["spec"] = plan.get("spec")
             if getattr(a, "split_default", False) and plan.get("max_context"):
@@ -184,7 +186,7 @@ def check_model(a, file_engine: list[str], cli_engine: list[str], used_argv: lis
                 part = ["--max-context", str(slot_share(a.shared_context, a.parallel))]
                 cfg["args"] += part
                 cli_engine += part
-            cfg["gpu_smi"] = [c.get("smi", -1) for p in (plans if replica else [plan]) for c in p.get("cards") or []]
+            cfg["gpu_smi"] = [c.get("smi", -1) for each in (plans if replica else [plan]) for c in each.get("cards") or []]
             cfg["args"] += ["--gpu", ",".join(str(i) for i in range(len(plan.get("cards") or [])))]
             for flag, value in (("--gpu-mode", gpu_text(a.gpu_mode)), ("--gpu-share", gpu_text(a.gpu_share))):
                 if value and not replica:                  # the engine checks them again on the cards it was given
@@ -289,9 +291,10 @@ def build_model(a, cfg: dict, logs, multi: bool, known) -> Service:
         # always built unloaded: the load itself is the lazy path's, started by the caller instead of by a request
         if cfg.get("replicas"):                         # gpu-mode replica: one engine per card, each the whole model
             cards = cfg["gpu_smi"]
-            parts = [ProcessEngine(cfg["engine_bin"], replica_args(engine_args(cfg), card, len(cards)) + gwords,
-                                   log=replica_log(cfg.get("log"), k, card), env={**env, "CUDA_VISIBLE_DEVICES": dev},
-                                   lazy=True) for k, (dev, card) in enumerate(zip(cfg["replicas"], cards))]
+            names = [f"gpu{c}" if isinstance(c, int) and c >= 0 else f"card{k}" for k, c in enumerate(cards)]
+            parts = [ProcessEngine(cfg["engine_bin"], replica_args(engine_args(cfg), name, len(cards)) + gwords,
+                                   log=replica_log(cfg.get("log"), k, name), env={**env, "CUDA_VISIBLE_DEVICES": dev},
+                                   lazy=True) for k, (dev, name) in enumerate(zip(cfg["replicas"], names))]
             engine = ReplicaEngine(parts, cards)
             print(tagged("gpus", "replica: " + ", ".join(f"GPU {c}" for c in cards) + " each run the whole model; "
                                  "a conversation stays on the card that holds it"), flush=True)
@@ -572,8 +575,9 @@ def main() -> int:
                 close()
             except KeyboardInterrupt:                   # second Ctrl+C: do not wait for the engine
                 for s in services:
-                    if getattr(s.engine, "proc", None):
-                        s.engine.proc.kill()
+                    for e in getattr(s.engine, "replicas", [s.engine]):
+                        if getattr(e, "proc", None):
+                            e.proc.kill()
         print("[server] stopped", flush=True)
     return rc
 

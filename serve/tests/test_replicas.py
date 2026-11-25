@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from serve.engine.process import ProcessEngine
-from serve.engine.replicas import BLOCK, AllLocks, ReplicaEngine, block_hashes, replica_args, replica_log
+from serve.engine.replicas import BLOCK, STAY_BLOCKS, AllLocks, Prompt, ReplicaEngine, replica_args, replica_log
 from serve.engine.vision import check_gpu, replica_cards
 from serve.frontend import ChatTemplate
 from serve.handler import serve
@@ -36,11 +36,16 @@ class Routing(unittest.TestCase):
     def test_equal_starts_give_equal_hashes_whole_blocks_only(self):
         a = list(range(BLOCK * 3 + 5))
         b = a[:BLOCK * 2] + [-1] * (BLOCK + 5)
-        ha, hb = block_hashes(a), block_hashes(b)
+        ha, hb = Prompt(a).hashes, Prompt(b).hashes
         self.assertEqual(len(ha), 3)
         self.assertEqual(ha[:2], hb[:2])
         self.assertNotEqual(ha[2], hb[2])
-        self.assertEqual(block_hashes(a[:BLOCK - 1]), [])
+        self.assertEqual(Prompt(a[:BLOCK - 1]).hashes, [])
+
+    def test_a_prompt_continues_an_earlier_one_only_when_it_holds_all_of_it(self):
+        first = list(range(BLOCK * 3 + 5))
+        self.assertEqual(Prompt(first + [9, 9]).continues(Prompt(first).end), 3)
+        self.assertEqual(Prompt(first[:-1] + [9, 9]).continues(Prompt(first).end), 0)
 
     def test_a_conversation_goes_back_to_its_replica(self):
         e = ReplicaEngine([Stub(), Stub()], [0, 1])
@@ -53,11 +58,55 @@ class Routing(unittest.TestCase):
         self.assertEqual(e.choose(first + [1, 2, 3]), i)
         self.assertEqual(e.choose(other + [4]), j)
 
-    def test_a_full_replica_gives_its_conversation_to_one_with_room(self):
+    def test_a_full_replica_gives_a_short_conversation_to_one_with_room(self):
         e = ReplicaEngine([Stub(batch=1), Stub(batch=1)], [0, 1])
         conv = list(range(BLOCK * 2))
         i = e.choose(conv)                               # still running: its replica is full
         self.assertEqual(e.choose(conv + [5]), 1 - i)
+
+    def test_a_long_conversation_waits_for_its_own_replica(self):
+        e = ReplicaEngine([Stub(batch=1), Stub(batch=1)], [0, 1])
+        conv = list(range(BLOCK * STAY_BLOCKS + 3))
+        i = e.choose(conv)                               # still running: its replica is full
+        self.assertEqual(e.choose(conv + [5]), i)
+
+    def test_a_shared_system_prompt_pins_no_new_conversation(self):
+        e = ReplicaEngine([Stub(batch=1), Stub(batch=1)], [0, 1])
+        system = list(range(BLOCK * STAY_BLOCKS * 2))
+        i = e.choose(system + [1, 2, 3])                 # one agent runs; another starts with the same system prompt
+        self.assertEqual(e.choose(system + [4, 5, 6]), 1 - i)
+
+    def test_a_later_pass_of_a_request_stays_on_its_replica(self):
+        e = ReplicaEngine([Stub(), Stub()], [0, 1])
+        cancel = threading.Event()
+        i = e.choose([1] * BLOCK, cancel=cancel)
+        e.active[i] += 5                                 # the other replica is now far less busy
+        self.assertEqual(e.choose([2] * BLOCK, cancel=cancel), i)
+        self.assertEqual(e.choose([2] * BLOCK, cancel=threading.Event()), 1 - i)
+
+    def test_a_restarted_replica_holds_no_conversation(self):
+        class Dead(Stub):
+            def restart(self, tries=3):
+                self.up = True
+        e = ReplicaEngine([Dead(), Stub()], [0, 1])
+        conv = list(range(BLOCK * STAY_BLOCKS))
+        e.choose(conv)
+        e.replicas[0].up = False
+        e.restart()
+        self.assertEqual(e.held(0, Prompt(conv)), 0)
+        self.assertEqual(e.continued(0, Prompt(conv + [1])), 0)
+
+    def test_last_is_this_requests_done_only(self):
+        e = ReplicaEngine([Stub(), Stub()], [0, 1])
+        for r in e.replicas:
+            r.last = {"from": "an earlier request"}
+        before = e.last
+        e.choose([1] * BLOCK)
+        self.assertIs(e.last, before)                    # waiting for its replica: nothing new
+        e.tl.seen = e.mine().last                        # it holds the replica (as generate does)
+        self.assertIs(e.last, before)                    # no DONE yet
+        e.mine().last = {"from": "this request"}
+        self.assertEqual(e.last, {"from": "this request"})
 
     def test_a_dead_replica_takes_nothing_while_another_lives(self):
         e = ReplicaEngine([Stub(up=False), Stub()], [0, 1])
@@ -105,17 +154,19 @@ class Settings(unittest.TestCase):
     def test_each_replica_parks_in_its_own_folder_on_its_part_of_the_budgets(self):
         args = ["--model", "m", "--conversation-cache-mib", "64000", "--conversation-cache-disk-mib", "1001",
                 "--conversation-cache-dir", str(Path("c"))]
-        out = replica_args(args, 3, 2)
+        out = replica_args(args, "gpu3", 2)
         self.assertEqual(out[out.index("--conversation-cache-mib") + 1], "32000")
         self.assertEqual(out[out.index("--conversation-cache-disk-mib") + 1], "500")
         self.assertEqual(out[out.index("--conversation-cache-dir") + 1], str(Path("c") / "gpu3"))
-        self.assertEqual(replica_args(["--model", "m"], 1, 2), ["--model", "m"])
+        self.assertEqual(replica_args(["--model", "m"], "gpu1", 2), ["--model", "m"])
+        tiny = replica_args(["--conversation-cache-mib", "1", "--conversation-cache-disk-mib", "0"], "gpu1", 2)
+        self.assertEqual(tiny, ["--conversation-cache-mib", "1", "--conversation-cache-disk-mib", "0"])
 
     def test_the_first_card_keeps_the_model_log(self):
         log = str(Path("d") / "engine.log")
-        self.assertEqual(replica_log(log, 0, 0), log)
-        self.assertEqual(replica_log(log, 1, 1), str(Path("d") / "engine.gpu1.log"))
-        self.assertIsNone(replica_log(None, 1, 1))
+        self.assertEqual(replica_log(log, 0, "gpu0"), log)
+        self.assertEqual(replica_log(log, 1, "gpu1"), str(Path("d") / "engine.gpu1.log"))
+        self.assertIsNone(replica_log(None, 1, "gpu1"))
 
     def test_all_locks_take_none_when_one_is_held(self):
         a, b = threading.Lock(), threading.Lock()

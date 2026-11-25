@@ -627,6 +627,11 @@ class ProcessEngine:
             return None
         return sum(kb.values()) >> 10 if len(kb) == 2 else None
 
+    def gpu_state_mib(self) -> int | None:
+        """The GPU memory this engine's process holds: what the driver moves into RAM when it sleeps; None unknown."""
+        pid = getattr(getattr(self, "proc", None), "pid", None)
+        return vram.process_mib(pid) if pid else None
+
     RESTART_RETRY_S = 15.0   # between restart() tries, for VRAM to be released
 
     def restart(self, tries: int = 3):
