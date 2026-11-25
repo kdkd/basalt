@@ -598,7 +598,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--gpu", help="the GPUs to use, as nvidia-smi numbers them: a number (0), a list whose first is the main "
                                   "card (0,1), or all (default: GPU 0 alone)")
     ap.add_argument("--gpu-mode", help="what the GPUs do together, required with two or more: peer (the main card runs every "
-                                       "layer, the others help), split (the layers are divided) or tensor")
+                                       "layer, the others help), split (the layers are divided), tensor, or replica (each card "
+                                       "runs the whole model with its own slots)")
     ap.add_argument("--gpu-share", help="the cards' relative shares, one positive number per card in the order of --gpu "
                                         "(3,1); default: by the mode")
     ap.add_argument("--tokenizer", default=str(ROOT / "pack/full/tokenizer"),

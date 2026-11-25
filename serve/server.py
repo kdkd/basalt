@@ -33,8 +33,9 @@ from serve.engine.image_source import image_sources_of  # noqa: E402
 from serve.engine.flags import flag_value  # noqa: E402
 from serve.engine.mock import MockEngine  # noqa: E402
 from serve.engine.process import ProcessEngine  # noqa: E402
+from serve.engine.replicas import ReplicaEngine, replica_args, replica_log  # noqa: E402
 from serve.engine.vision import (EngineVision, Vision, check_gpu, child_env, engine_args, flag_refused, gpu_card_name,  # noqa: E402
-                                 gpu_text, gpus_in_play, model_plan, vision_card, vision_env, vision_item)
+                                 gpu_text, gpus_in_play, model_plan, replica_cards, vision_card, vision_env, vision_item)
 from serve.models import dialect_for  # noqa: E402
 from serve.handler import Server, serve  # noqa: E402
 from serve.security import (LOOPBACK_NAMES, allowed_hosts_of, api_key_from_file, api_key_of,  # noqa: E402
@@ -157,8 +158,14 @@ def check_model(a, file_engine: list[str], cli_engine: list[str], used_argv: lis
         if not a.mock_engine:
             # the engine's own choice and its own flag rules, printed once here; the engine then sees only these cards,
             # main first
+            replica = gpu_text(a.gpu_mode) == "replica"
             try:
-                plan = model_plan(a.engine_bin, a.model, spec.gpu, list(spec.engine_words), a.gpu_mode, a.gpu_share)
+                if replica:                            # the whole model on each card: each card's own plan, alone
+                    plans = [model_plan(a.engine_bin, a.model, c, list(spec.engine_words)) for c in replica_cards(spec.gpu)]
+                    plan = plans[0]
+                    cfg["replicas"] = [p["devices"] for p in plans]
+                else:
+                    plan = model_plan(a.engine_bin, a.model, spec.gpu, list(spec.engine_words), a.gpu_mode, a.gpu_share)
             except ValueError as e:
                 fail(f"{a.model}: {e}")
             card = vision_card(mode)
@@ -177,10 +184,10 @@ def check_model(a, file_engine: list[str], cli_engine: list[str], used_argv: lis
                 part = ["--max-context", str(slot_share(a.shared_context, a.parallel))]
                 cfg["args"] += part
                 cli_engine += part
-            cfg["gpu_smi"] = [c.get("smi", -1) for c in plan.get("cards") or []]
+            cfg["gpu_smi"] = [c.get("smi", -1) for p in (plans if replica else [plan]) for c in p.get("cards") or []]
             cfg["args"] += ["--gpu", ",".join(str(i) for i in range(len(plan.get("cards") or [])))]
             for flag, value in (("--gpu-mode", gpu_text(a.gpu_mode)), ("--gpu-share", gpu_text(a.gpu_share))):
-                if value:                                  # the engine checks them again on the cards it was given
+                if value and not replica:                  # the engine checks them again on the cards it was given
                     cfg["args"] += [flag, value]
     for flag in a.skipped:
         lines.append(tagged("engine", f"{flag[2:]} from the top level: this model has no such flag, skipped"))
@@ -280,13 +287,23 @@ def build_model(a, cfg: dict, logs, multi: bool, known) -> Service:
         if cdir and cmib != "0" and a.debug:
             print(tagged("disk", f"conversations={cdir} disk-mib={cmib}"), flush=True)
         # always built unloaded: the load itself is the lazy path's, started by the caller instead of by a request
-        engine = ProcessEngine(cfg["engine_bin"], engine_args(cfg) + gwords, log=cfg.get("log"), env=env, lazy=True)
+        if cfg.get("replicas"):                         # gpu-mode replica: one engine per card, each the whole model
+            cards = cfg["gpu_smi"]
+            parts = [ProcessEngine(cfg["engine_bin"], replica_args(engine_args(cfg), card, len(cards)) + gwords,
+                                   log=replica_log(cfg.get("log"), k, card), env={**env, "CUDA_VISIBLE_DEVICES": dev},
+                                   lazy=True) for k, (dev, card) in enumerate(zip(cfg["replicas"], cards))]
+            engine = ReplicaEngine(parts, cards)
+            print(tagged("gpus", "replica: " + ", ".join(f"GPU {c}" for c in cards) + " each run the whole model; "
+                                 "a conversation stays on the card that holds it"), flush=True)
+        else:
+            engine = ProcessEngine(cfg["engine_bin"], engine_args(cfg) + gwords, log=cfg.get("log"), env=env, lazy=True)
+            parts = [engine]
         if cfg.get("log"):                              # follow the engine's log file
-            print(f"[server] engine log: {cfg['log']}", flush=True)
-            echo_engine_line = engine_echo(engine)
-            threading.Thread(target=tail_file, args=(logs, cfg["log"], "eng"),
-                             kwargs={"on_line": echo_engine_line,
-                                     "skip": lambda line: load_progress(line) is not None}, daemon=True).start()
+            for part in parts:
+                print(f"[server] engine log: {part.log_path}", flush=True)
+                threading.Thread(target=tail_file, args=(logs, part.log_path, "eng"),
+                                 kwargs={"on_line": engine_echo(part),
+                                         "skip": lambda line: load_progress(line) is not None}, daemon=True).start()
         else:
             ProcessEngine.stderr_sink = lambda line: logs.add("eng", line)
         if isinstance(vision, EngineVision):

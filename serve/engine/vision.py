@@ -498,7 +498,7 @@ def gpu_text(value) -> str:
     return str(value).strip()
 
 
-GPU_MODES = ("peer", "split", "tensor")
+GPU_MODES = ("peer", "split", "tensor", "replica")
 
 
 def check_gpu(value, mode=None, share=None) -> None:
@@ -515,14 +515,16 @@ def check_gpu(value, mode=None, share=None) -> None:
                              "or all; see docs/configuration/gpus.md")
         cards = len(items)
     if mode_text and mode_text not in GPU_MODES:
-        raise ValueError(f'gpu-mode "{mode_text}": expected peer, split or tensor; see docs/configuration/gpus.md')
+        raise ValueError(f'gpu-mode "{mode_text}": expected peer, split, tensor or replica; see docs/configuration/gpus.md')
     shown = text or "0"
     if cards is not None and cards > 1 and not mode_text:
-        raise ValueError(f"gpu {text} names {cards} cards: set gpu-mode to peer, split or tensor; see docs/configuration/gpus.md")
+        raise ValueError(f"gpu {text} names {cards} cards: set gpu-mode to peer, split, tensor or replica; see docs/configuration/gpus.md")
     if cards == 1 and mode_text:
         raise ValueError(f'gpu-mode {mode_text}: gpu names one card (gpu "{shown}"); a mode needs two or more')
     if cards == 1 and share_text:
         raise ValueError(f'gpu-share: gpu names one card (gpu "{shown}"); shares need two or more')
+    if share_text and mode_text == "replica":
+        raise ValueError("gpu-share: gpu-mode replica runs the whole model on every card; shares do not apply")
     if share_text:
         items = [x.strip() for x in share_text.split(",")]
         try:
@@ -532,6 +534,21 @@ def check_gpu(value, mode=None, share=None) -> None:
         if not numbers or not all(n > 0 and n != float("inf") for n in numbers) or (cards is not None and len(numbers) != cards):
             n = f" ({cards} cards)" if cards is not None else ""
             raise ValueError(f'gpu-share "{share_text}": expected one positive number per card of gpu{n}, like 3,1')
+
+
+def replica_cards(value) -> list[str]:
+    """The cards of gpu-mode replica as the engine's --gpu reads one card each: the listed numbers, or for `all` every
+    card CUDA_VISIBLE_DEVICES lists, else every card nvidia-smi numbers."""
+    text = gpu_text(value)
+    if text != "all":
+        return [x.strip() for x in text.split(",")]
+    visible = [x for x in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",") if x.strip()]
+    if "CUDA_VISIBLE_DEVICES" in os.environ:
+        return [str(i) for i in range(len(visible))]
+    cards = []
+    while gpu_card_name(len(cards)) is not None:
+        cards.append(str(len(cards)))
+    return cards
 
 
 def gpu_list(cfg: dict) -> list:
