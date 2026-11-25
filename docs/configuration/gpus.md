@@ -121,26 +121,29 @@ model's experts or caches.
 The server starts one engine per card of `gpu`, each the whole model at the entry's settings (`parallel` slots and
 `max-context` per card), and sends every request to one of them. `basalt`, `basalt-bench` and `basalt-probe` refuse the mode.
 
-- **Routing:** a request goes to the card that recently read the longest start of its prompt, among the cards with a free slot
-  (else among all of them), so an agent's next turn reads only its new tokens; a prompt no card holds goes to the least busy
-  card, and the client's session header breaks a tie. A conversation that moves to another card reads its prompt again there.
+- **Routing:** a request goes to the card that recently read the longest start of its prompt, so an agent's next turn reads only
+  its new tokens. A turn that continues an earlier prompt of 4K tokens or more waits for a slot on that prompt's card; any
+  other prompt takes a card with a free slot (a shared system prompt alone does not hold an agent to one card). A prompt no
+  card holds goes to the least busy card, and the client's session header breaks a tie.
 - **Shared budgets:** `conversation-cache-mib` and `conversation-cache-disk-mib` are the machine's RAM and disk, divided
   equally between the cards; each card parks its conversations in its own folder (`gpu<N>` under the cache folder) and writes
   its own engine log (`engine.gpu<N>.log` beside the first card's).
 - **Pictures:** the least busy card encodes a request's pictures.
-- **Start, sleep, unload:** the cards load at once and sleep, wake and unload together; a card that ended starts again alone at
-  the next request, while the other keeps its conversations.
-- `gpu-share` is refused: every card holds the whole model.
+- **Start, sleep, unload:** the cards load one after another and sleep, wake and unload together; a card that ended starts
+  again alone at the next request, while the other keeps its conversations.
+- `gpu-share` is refused: every card holds the whole model. `logit_bias` is refused as with `parallel` slots.
+- A model whose experts do not all fit a card holds a RAM copy per card, each sized to the RAM the cards loaded before it
+  left.
 - Use it for several conversations at once on a model that fits one card. One conversation decodes as fast as on one card.
 
-Measured, Inkling 2 Mini (q8 pack) on two RTX PRO 6000 at 600 W, `--max-context 131072 --slot-full-context`, eight
-conversations of four turns each (a 12K-token start, 400 tokens a turn), ABBA x2:
+Measured, Inkling 2 Mini (q8 pack) on two RTX PRO 6000 at 600 W, `--max-context 131072 --slot-full-context`, conversations
+of four turns each (a 12K-token start, 400 tokens a turn), ABBA x2:
 
-| | one card, `parallel 8` | `gpu-mode replica`, `parallel 4` | `gpu-mode split`, `parallel 8` |
-| --- | --- | --- | --- |
-| Tokens/s, all conversations | 544 | 932 | 524 (one run) |
-| Wall time | 23.5 s | 13.7 s | 24.5 s |
-| One conversation alone, tokens/s | 336.6 | 334.5 | |
+| | one card, `parallel 8` | `gpu-mode replica`, `parallel 4` |
+| --- | --- | --- |
+| Eight conversations, tokens/s | 544 | 932 |
+| Eight conversations, wall time | 23.5 s | 13.7 s |
+| One conversation, tokens/s | 336.6 | 334.5 |
 
 ## Two 16 GB cards
 
